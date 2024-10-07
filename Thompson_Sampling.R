@@ -4,11 +4,6 @@
 
 Times = 1000
 
-alpha = 100
-beta = 200
-
-
-
 # sample from prior function
 
 prior_sample = function(K,alpha_vec,beta_vec){
@@ -28,9 +23,6 @@ prior_sample = function(K,alpha_vec,beta_vec){
 
 ## Thompson Sampling
 
-# From example in the paper
-#alpha_vec = c(1000,1000,100)
-#beta_vec = c(100,110,10)
 
 # Random ground truth probabilities
 #actual_thetas = c(runif(K))
@@ -47,6 +39,10 @@ action_counts = c(rep(0,K))
 # initialize prior parameters
 alpha_vec = rep(0,K)
 beta_vec = rep(0,K)
+
+# From example in the paper
+#alpha_vec = c(1000,1000,100)
+#beta_vec = c(100,110,10)
 
 
 for(t in 1:Times){

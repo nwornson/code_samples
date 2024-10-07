@@ -1,0 +1,343 @@
+---
+params:
+  Crop_in: 'Canola (oilseed rape)'
+  Protocol_in: 'BRSNC-6ADV-5FSP11-23AU103'
+  Country: 'AU'
+title: |
+    |  `r params$Country` - `r params$Crop_in` - Analysis
+    |  `r params$Protocol_in`
+author: "Nick Wornson"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE)
+
+library(scales)
+library(agricolae)
+library(DescTools)
+library(broom)
+library(lme4)
+library(rstatix)
+library(tidyverse)
+library(pander)
+```
+
+
+
+
+
+```{r}
+path = 'G:/Shared drives/Loam Bio Field and GH Data - Internal/5. Data Analysis/'
+setwd(path)
+
+raw_data = read.csv('FSP_all_proc_data.csv') %>%
+  filter(protocol_id == params$Protocol_in)
+
+cols = c(1:8,10,11)
+raw_data[cols] = lapply(raw_data[cols],factor)
+
+
+```
+
+
+
+```{r}
+
+loc_data = raw_data %>%
+  group_by(trial_name,treatment_name) %>%
+  summarise(Mean_CBuild.ratio = mean(CBuild.ratio,na.rm = TRUE),
+            SE.CBuild.ratio = sd(CBuild.ratio,na.rm = TRUE)/sqrt(n()),
+            Mean_Yield = mean(Yield,na.rm = TRUE),
+            SE.Yield = sd(Yield,na.rm = TRUE)/sqrt(n())) %>%
+  group_by(trial_name) %>%
+  mutate(Y.over.C = Mean_Yield / Mean_Yield[grepl('Control',treatment_name)],
+         CBuild.diff = Mean_CBuild.ratio - Mean_CBuild.ratio[grepl('Control',treatment_name)],
+         SE.CBuild.diff = sqrt(SE.CBuild.ratio^2 + SE.CBuild.ratio[treatment_name == 'Control']^2)) 
+
+L2 = loc_data %>% group_by(treatment_name) %>%
+  summarise(Avg.CBuild = label_percent()(mean(Mean_CBuild.ratio)),
+            SE.CBuild.ratio = label_percent()(sd(Mean_CBuild.ratio)/sqrt(n())),
+            Avg.TOC.diff = mean(CBuild.diff),
+            TOC.WR = label_percent()(sum(CBuild.diff >= 0)/n()),
+            All.Mean_Yield = mean(Mean_Yield),
+            SE.Yield = sd(Mean_Yield)/sqrt(n()),
+            Mean_Y.over.C = label_percent()(mean(Y.over.C)),
+            Y.WR = label_percent()(sum(Y.over.C >= 1)/n()),
+            Trials = n()) %>%
+  arrange(desc(Avg.TOC.diff)) %>%
+  mutate(Avg.TOC.diff = label_percent()(Avg.TOC.diff))
+  
+  
+
+L2 %>%
+  select(- All.Mean_Yield,- SE.Yield,-  Mean_Y.over.C,-Trials,-Y.WR) %>%
+  pander(caption = 'TOC Overall',split.cells = .08)
+
+L2 %>%
+  select(- Avg.CBuild,- SE.CBuild.ratio,- Avg.TOC.diff,-TOC.WR)%>%
+  pander(caption = 'Yield Overall',split.cells = .08)
+
+```
+```{r,eval=FALSE}
+
+ggplot(aes(x = treatment_name,y = Y.over.C)) +
+  geom_bar(stat = 'identity') +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90)) 
+
+```
+
+
+# Treatment Effect - Anova
+
+
+```{r}
+m.C = lm(Mean_CBuild.ratio ~ treatment_name + trial_name,loc_data)
+anova(m.C) %>% pander(caption = 'TOC ANOVA')
+
+m.Y = lm(Mean_Yield ~ treatment_name + trial_name,loc_data)
+anova(m.Y) %>% pander(caption = 'Yield ANOVA')
+
+
+
+```
+
+# Individual Comparisons - TOC (H/B)
+
+## Treatments with no letters in common in 'group' are significantly different.
+
+```{r}
+alpha = .1
+lsd = LSD.test(m.C,'treatment_name',alpha = alpha)$groups
+lsd$treatment_name = rownames(lsd)
+df = full_join(L2,lsd,by = 'treatment_name') %>%
+  select(-Avg.CBuild)
+
+
+
+df %>% select(-All.Mean_Yield,-SE.Yield,-Mean_Y.over.C,-Y.WR,-TOC.WR,-Trials,-SE.CBuild.ratio) %>%
+  arrange(desc(Mean_CBuild.ratio)) %>%
+  mutate(Mean_CBuild.ratio = label_percent()(round(Mean_CBuild.ratio,2))) %>%
+  pander(caption = 'TOC',split.cells = .3)
+
+
+
+
+lsd = LSD.test(m.Y,'treatment_name',alpha = alpha)$groups
+lsd$treatment_name = rownames(lsd)
+df = full_join(L2,lsd,by = 'treatment_name') #%>%
+  #select(-CBuild.ratio)
+
+
+
+df %>% select(-Avg.CBuild,-SE.CBuild.ratio,-Avg.TOC.diff,-Y.WR,-TOC.WR,-SE.Yield,-Trials,-All.Mean_Yield) %>%
+  arrange(desc(Mean_Yield)) %>%
+  pander(caption = 'Yield',split.cells = .3)
+
+
+
+
+
+
+
+
+```
+
+
+
+# Dunnett's Test (compare to control)
+```{r}
+m1_mc = multcomp::glht(m.C,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'greater')
+out=summary(m1_mc) 
+pval.table = data.frame(cbind(out$test$coefficients,out$test$pvalues))
+
+colnames(pval.table) = c('Estimate','Pvalue')
+
+pval.table %>% pander(caption = 'TOC')
+
+m1_mc = multcomp::glht(m.Y,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'greater')
+out=summary(m1_mc) 
+pval.table = data.frame(cbind(out$test$coefficients,out$test$pvalues))
+
+colnames(pval.table) = c('Estimate','Pvalue')
+
+pval.table %>% pander(caption = 'Yield')
+```
+
+```{r}
+## get pvalues
+
+p.pval.df.CB = raw_data %>%
+  group_by(trial_name) %>%
+  t_test(data=.,CBuild.ratio ~ treatment_name,ref.group = "Control",
+         paired = FALSE,alternative = 'less',p.adjust.method = 'bonferroni') %>% # change to paired when data fixed
+  select(trial_name,group2,p)%>%
+  mutate(trt_trial = paste(trial_name,group2)) %>%
+  select(trt_trial,p) %>%
+  rename(pair.pval.CB = p) %>%
+  mutate(psymbol.CB = cut(pair.pval.CB,
+                       breaks=c(0,0.01, 0.05,.1, 1),
+                       labels=c("***", "**", "*","")))
+
+
+p.pval.df.Y = raw_data %>%
+  group_by(trial_name) %>%
+  t_test(data=.,Yield ~ treatment_name,ref.group = "Control",
+         paired = FALSE,alternative = 'less',p.adjust.method = 'bonferroni') %>% # change to paired when data fixed
+  select(trial_name,group2,p)%>%
+  mutate(trt_trial = paste(trial_name,group2)) %>%
+  select(trt_trial,p) %>%
+  rename(pair.pval.Y = p) %>%
+  mutate(psymbol.Y = cut(pair.pval.Y,
+                       breaks=c(0,0.01, 0.05,.1, 1),
+                       labels=c("***", "**", "*","")))
+
+df_L1.v2 = loc_data %>%
+  mutate(trt_trial = paste(trial_name,treatment_name)) %>%
+  left_join(p.pval.df.CB,by = 'trt_trial') %>%
+  left_join(p.pval.df.Y,by = 'trt_trial')
+```
+
+
+
+# Appendix A - Ranked Barcharts
+
+```{r, fig.height=6}
+
+
+
+
+boundry = .5
+offset = .15
+max.tc = max(abs(df_L1.v2$CBuild.diff))
+
+if(max.tc + offset > boundry){
+  boundry = max.tc + offset
+  }
+
+boundry = 100 * boundry
+
+for(trt in levels(df_L1.v2$treatment_name)){
+    
+    if(trt=='Control'){next}
+    
+  # TOC
+  
+    #temp2 = loc_data %>% filter(treatment_name == trt) %>% 
+    #  select(trial_name,psymbol.CB) %>%
+    #  distinct()
+  
+    temp = df_L1.v2 %>% filter(treatment_name == trt) %>% 
+      select(trial_name,CBuild.diff,SE.CBuild.diff,psymbol.CB) %>%
+      mutate(WR = ifelse(CBuild.diff >= 0,1,0)) %>%
+      arrange(desc(-CBuild.diff)) 
+    
+    
+    
+    locs = levels(factor(temp$trial_name,level=factor(temp$trial_name)))
+    top = boundry - 5  
+    top2 = top - 6
+
+    mean_build = round(mean(temp$CBuild.diff),3)
+    WR = sum(temp$WR)/nrow(temp)
+
+    anno = data.frame(x = locs[1],y = c(top,top2),
+                  label = c(paste('Avg', label_percent()(mean_build)),
+                            paste('WR', label_percent()(WR))))
+    
+    # convert to %
+    temp$CBuild.diff.perc = 100 * temp$CBuild.diff 
+    temp$SE.CBuild.diff.perc = 100 * temp$SE.CBuild.diff
+    
+    
+    
+    
+    p1 = temp %>%
+      ggplot(aes(x = factor(trial_name,level = trial_name),
+                 y = CBuild.diff.perc,label = psymbol.CB)) + 
+      geom_bar(stat = 'identity',fill = 'aquamarine3') +
+    geom_errorbar(aes(x = factor(trial_name, level=trial_name),
+                      ymin = CBuild.diff.perc - SE.CBuild.diff.perc, ymax = CBuild.diff.perc + SE.CBuild.diff.perc),
+                  width = .25) +
+      geom_hline(yintercept = 0) +
+      xlab('') + ylab('TC H/B diff from Control (%)') +
+      ylim(-boundry,boundry) +
+      geom_text(data=anno,aes(x=x,y=y,label=label)) +
+      geom_text(vjust = -2,
+            position = position_dodge(.9),size = 5) +
+      ggtitle(paste('TC diff from Control - ',trt)) +
+      theme_classic() + 
+      theme(axis.text.x = element_text(angle = 90))
+    
+    print(p1)
+  
+    cat("\n\\newpage\n")
+  
+  
+  # Yield
+  
+    #temp2 = df_L1 %>% filter(treatment_name == trt) %>% 
+    #  select(trial_name,psymbol.Y) %>%
+    #  distinct()
+  
+    temp = loc_data %>% filter(treatment_name == trt) %>% 
+      select(trial_name,Y.over.C) %>%
+      aggregate(Y.over.C ~ trial_name,mean) %>%
+      mutate(WR = ifelse(Y.over.C >= 1,1,0)) %>%
+      arrange(desc(-Y.over.C)) #%>%
+      #left_join(temp2,by = 'trial_name')
+    
+  
+    
+    locs = levels(factor(temp$trial_name,level=factor(temp$trial_name)))
+    top = 1.50  
+    top2 = top - .15
+
+    mean_build = round(mean(temp$Y.over.C),3)
+    WR = sum(temp$WR)/nrow(temp)
+
+    anno = data.frame(x = locs[1],y = c(top,top2),
+                  label = c(paste('Avg', label_percent()(mean_build)),
+                            paste('WR', label_percent()(WR))))
+        
+    p2 = temp %>%
+      ggplot(aes(x = factor(trial_name,level = trial_name),
+                 y = Y.over.C)) + #,label = psymbol.Y
+      geom_bar(stat = 'identity',fill = 'aquamarine3') +
+    #geom_errorbar(aes(x = factor(Location, level=Location),
+    #                  ymin = Y.over.C - SE.Yield, ymax = Y.over.C + SE.Yield),
+    #              width = .5) +
+      geom_hline(yintercept = 1) +
+      xlab('') + ylab('Yield (%) Over Control') +
+      ylim(0,1.5) +
+      geom_text(data=anno,aes(x=x,y=y,label=label)) +
+      #geom_text(vjust = 0.2,
+      #      position = position_dodge(.9),size = 5) +
+      ggtitle(paste('Yield - ',trt)) +
+      theme_classic() + 
+      theme(axis.text.x = element_text(angle = 90))
+    
+    print(p2)
+  
+  
+}
+
+
+
+
+```
+
+
+
+# Appendix B - Model Fit
+
+```{r}
+par(mfrow = c(2,2))
+plot(m.C)
+
+par(mfrow = c(2,2))
+plot(m.Y)
+```
+

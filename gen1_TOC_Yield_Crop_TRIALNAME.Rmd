@@ -1,0 +1,340 @@
+---
+params:
+  Crop_in: 'Soybean'
+  Trial_in: 'SGS PRE1 Soybean 2023'
+  Country: 'US'
+title: "`r params$Country` - `r params$Crop_in` - `r params$Trial_in` YIELD OUTLIERS REMOVED"
+author: "Nick Wornson"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE,warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+
+library(agricolae)
+library(DescTools)
+library(broom)
+library(lme4)
+library(rstatix)
+library(tidyverse)
+library(pander)
+
+```
+
+
+
+
+
+```{r}
+path = 'G:/Shared drives/Loam Bio Field and GH Data - Internal/5. Data Analysis/'
+setwd(path)
+
+raw_data = read.csv('FSP_all_proc_data.csv') %>%
+  filter(trial_name == params$Trial_in)
+
+cols = c(1:8,10,11)
+raw_data[cols] = lapply(raw_data[cols],factor)
+```
+
+
+
+```{r}
+
+#which(is.na(df$Yield)) # no missing Yield
+df = raw_data %>% filter(trial_name == params$Trial_in) %>%
+  mutate(treatment_name = relevel(treatment_name,ref = 'Control'))
+
+df2 = df %>%
+  group_by(treatment_name) %>%
+  summarise(Mean_CBuild_ratio = mean(CBuild.ratio,na.rm = TRUE),
+            SE_CBuild_ratio = sd(CBuild.ratio,na.rm = TRUE)/sqrt(n()),
+            Mean_Yield = mean(Yield,na.rm = TRUE),
+            SE_Yield = sd(Yield,na.rm = TRUE)/sqrt(n())) %>%
+  mutate(Y.over.C = Mean_Yield / Mean_Yield[grepl('Control',treatment_name)],
+         CBuild_ratio.diff = Mean_CBuild_ratio - Mean_CBuild_ratio[grepl('Control',treatment_name)]) %>% 
+  relocate(CBuild_ratio.diff, .before = Mean_Yield) %>%
+  arrange(desc(CBuild_ratio.diff))
+df2 %>% 
+  select(-Mean_Yield,-SE_Yield,-Y.over.C) %>%
+  pander(caption='TOC Summary')
+
+df2 %>% 
+  select(-Mean_CBuild_ratio,-SE_CBuild_ratio,-CBuild_ratio.diff) %>%
+  pander(caption='Yield Summary')
+
+```
+
+
+```{r}
+ggplot(df,aes(x = treatment_name,y = CBuild.ratio)) +
+  geom_boxplot()+
+  xlab('') +
+  ylab('TOC (H/B)') +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(caption = 'Figure 1')
+
+ggplot(df,aes(x = treatment_name,y = Yield)) +
+  geom_boxplot()+
+  xlab('') +
+  ylab('Yield') +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(caption = 'Figure 2')
+
+```
+
+
+
+# Barcharts
+
+```{r}
+df2 %>% ggplot(aes(x = treatment_name,y = Mean_CBuild_ratio)) +
+    geom_bar(stat = 'identity',fill = 'white',color = 'black') +
+    geom_errorbar(aes(x=treatment_name,ymin = Mean_CBuild_ratio - SE_CBuild_ratio,
+                      ymax = Mean_CBuild_ratio + SE_CBuild_ratio),
+                  width = .5) +  
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90))+
+  xlab('') + ylab('Mean TOC (H/B)')
+
+df2 %>% ggplot(aes(x = treatment_name,y = Mean_Yield)) +
+    geom_bar(stat = 'identity',fill = 'white',color = 'black') +
+    geom_errorbar(aes(x=treatment_name,ymin = Mean_Yield - SE_Yield,ymax = Mean_Yield + SE_Yield),width = .5) +  
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90))+
+  xlab('') + ylab('Mean Yield')
+```
+
+# Heatmaps
+
+```{r}
+
+upr = max(c(df$BTOC,df$HTOC))
+lwr = min(c(df$BTOC,df$HTOC))
+
+m.btoc = mean(df$BTOC,na.rm = TRUE)
+m.htoc = mean(df$HTOC,na.rm = TRUE)
+m.Yield = mean(df$Yield,na.rm = TRUE)
+
+ttl = paste('Baseline TC.  Field AVG: ',round(m.btoc,3))
+df  %>%
+    ggplot(aes(x = sowing_row, y = range_bay, fill = BTOC)) +
+    geom_tile() +
+    scale_fill_gradient(low="palevioletred",high="palegreen", 
+                        limits = c(lwr,upr))+
+          geom_text(aes(label = treatment_name), color = "black", size = 1.6,
+                    angle = 90) +
+    ggtitle(ttl)
+  
+
+ttl = paste('Harvest TC.  Field AVG: ',round(m.htoc,3))
+df  %>%
+    ggplot(aes(x = sowing_row, y = range_bay, fill = HTOC)) +
+    geom_tile() +
+    scale_fill_gradient(low="palevioletred",high="palegreen",
+                        limits = c(lwr,upr)) +
+    geom_text(aes(label = treatment_name), color = "black", size = 1.6,
+              angle = 90) +
+    ggtitle(ttl)
+
+
+ttl = paste('Yield.  Field AVG: ',round(m.Yield,3))  
+df  %>%
+    ggplot(aes(x = sowing_row, y = range_bay, fill = Yield)) +
+    geom_tile() +
+    scale_fill_gradient(low="palevioletred",high="palegreen")+
+    geom_text(aes(label = treatment_name), color = "black", size = 1.6,
+              angle = 90)  +
+    ggtitle(ttl)
+```
+
+# Treatment Effect
+
+
+```{r}
+
+m.C = lm(CBuild.ratio ~ treatment_name + Rep,df)
+Anova(m.C) %>% tidy() %>% pander(caption = 'Analysis of Variance - Carbon Build')
+
+m.Y = lm(Yield ~ treatment_name + Rep,df)
+Anova(m.Y) %>% tidy() %>% pander(caption = 'Analysis of Variance - Yield')
+
+```
+
+# Individual Comparisons
+
+## Treatments with no letters in common are significantly different.
+
+
+### TOC
+
+```{r}
+library(lme4)
+
+m1.C = lm(CBuild.ratio ~ treatment_name,df)
+#m2.C = lmer(CBuild.ratio ~ treatment_name + (1|range_bay) + (1|sowing_row),df)
+
+alpha = .1
+lsd = LSD.test(m1.C,'treatment_name',alpha = alpha)$groups
+lsd$treatment_name = rownames(lsd)
+df3 = full_join(df2,lsd,by = 'treatment_name') %>% select(-CBuild.ratio,-SE_CBuild_ratio,-Mean_Yield,-SE_Yield,-Y.over.C )
+
+yl = max(df2$Mean_Yield) + 4000
+
+# just the table?
+df3 %>% pander(caption = 'All Pairwise Comparisons at alpha = .1')
+
+```
+
+### Yield
+```{r}
+
+m2.Y = lm(Yield ~ treatment_name,df)
+
+alpha = .1
+lsd = LSD.test(m2.Y,'treatment_name',alpha = alpha)$groups
+lsd$treatment_name = rownames(lsd)
+df3 = full_join(df2,lsd,by = 'treatment_name') %>% select(-Yield,-SE_Yield,-Mean_CBuild_ratio,-SE_CBuild_ratio,-CBuild_ratio.diff)
+
+yl = max(df2$Mean_Yield) + 4000
+
+# just the table?
+df3 %>% pander(caption = 'All Pairwise Comparisons at alpha = .1')
+
+# ggplot() +
+#     geom_bar(data=df3,aes(x=treatment_name,y=Mean_Yield),stat = 'identity',fill = 'white',color = 'black') +
+#     geom_errorbar(data=df3,aes(x=treatment_name,ymin = Mean_Yield - SE_Yield,ymax = Mean_Yield + SE_Yield),width = .5) +
+#     geom_point(data=df,aes(treatment_name,Yield))  +
+#   geom_text(data=df3,aes(treatment_name,Mean_Yield + 1000,label = groups), vjust = -.8,
+#             position = position_dodge(.9),size = 5,fontface = 'bold')  +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(angle = 90))+
+#   ylim(0,yl) + 
+#   xlab('') + ylab('Adj. Mean Yield') +
+#   ggtitle(paste('Alpha = ',alpha))
+```
+
+
+
+
+```{r, eval=FALSE}
+# t-tests
+
+df %>%
+  t_test(data=.,Yield ~ treatment_name,ref.group = "Control/untreated",
+         paired = FALSE,alternative = 'less',p.adjust.method = 'bonferroni') %>% # change to paired when data fixed
+  select(group2,statistic,df,p,p.adj) %>% 
+  pander(caption = 'Compare to Control T-Test P-Values')
+  # select(trial_name,group2,p)%>%
+  # mutate(trt_trial = paste(trial_name,group2)) %>%
+  # select(trt_trial,p) %>%
+  # rename(pair.pval.CB = p) %>%
+  # mutate(psymbol.CB = cut(pair.pval.CB,
+  #                      breaks=c(0,0.01, 0.05,.1, 1),
+  #                      labels=c("***", "**", "*","")))
+```
+
+# Dunnett's Test (compares to control only)
+
+```{r}
+#DunnettTest(Yield ~ treatment_name,df,control = 'Control/untreated') 
+
+m1_mc = multcomp::glht(m1.C,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'greater')
+out= summary(m1_mc) 
+
+pval.table = data.frame(cbind(out$test$coefficients,out$test$pvalues))
+
+colnames(pval.table) = c('Estimate','Pvalue')
+
+pval.table %>% pander(caption = 'TOC')
+
+
+
+m1_my = multcomp::glht(m.Y,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'greater')
+out= summary(m1_my) 
+
+pval.table = data.frame(cbind(out$test$coefficients,out$test$pvalues))
+
+colnames(pval.table) = c('Estimate','Pvalue')
+
+pval.table %>% pander(caption = 'Yield')
+
+```
+```{r}
+m1_mc = multcomp::glht(m1.C,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'two.sided')
+DCI=confint(m1_mc) 
+
+DCI$confint %>% pander('Dunnetts CI for TOC')
+```
+
+
+
+```{r,eval=FALSE}
+m1_mc_me = multcomp::glht(m2.C,linfct = multcomp::mcp(treatment_name = "Dunnett"),alternative = 'two.sided')
+DCI=confint(m1_mc_me) 
+
+#DCI$confint %>% pander('Dunnetts CI for TOC')
+
+test=summary(m2.C)
+
+sigma = test$sigma #--what you want
+
+test_df = df %>%
+  group_by(treatment_name) %>%
+  summarise(Mean_CBuild_ratio = mean(CBuild.ratio,na.rm = TRUE),
+            SE_CBuild_ratio = sd(CBuild.ratio,na.rm=TRUE)/sqrt(n()),
+            SE_CBuild_ratio_model = sigma/sqrt(n()),
+            Mean_Yield = mean(Yield,na.rm = TRUE),
+            SE_Yield = sd(Yield,na.rm = TRUE)/sqrt(n())) %>%
+  mutate(Y.over.C = Mean_Yield / Mean_Yield[grepl('Control',treatment_name)],
+         CBuild_ratio.diff = Mean_CBuild_ratio - Mean_CBuild_ratio[grepl('Control',treatment_name)],
+         SE.CBuild.diff.mod = sqrt(SE_CBuild_ratio_model^2 + SE_CBuild_ratio_model[grepl('Control',treatment_name)]^2),
+         SE.CBuild.diff = sqrt(SE_CBuild_ratio^2 + SE_CBuild_ratio[grepl('Control',treatment_name)]^2)) %>% 
+  relocate(CBuild_ratio.diff, .before = Mean_Yield) %>%
+  arrange(desc(CBuild_ratio.diff))
+
+test_df
+```
+
+
+```{r,eval=FALSE}
+# tukey
+
+tukey_hsd(m.Y) %>% 
+  select(group1,group2,estimate,conf.low,conf.high, p.adj) %>%
+  pander(caption = 'Tukey HSD - All Pairwise Comparisons',split.table = Inf)
+```
+
+# Appendix A - Histograms
+
+```{r}
+ggplot(df,aes(BTOC)) +
+  geom_histogram(bins = 40)+
+  xlab('TOC (%)') +
+  theme_classic() +
+  ggtitle('Baseline TOC')
+
+ggplot(df,aes(HTOC)) +
+  geom_histogram(bins = 40)+
+  xlab('TOC (%)') +
+  theme_classic() +
+  ggtitle('Harvest TOC')
+
+ggplot(df,aes(Yield)) +
+  geom_histogram(bins = 40)+
+  xlab('Yield') +
+  theme_classic() +
+  ggtitle('Yield')
+```
+
+# Appendix B - Model Fit
+```{r}
+par(mfrow=c(2,2))
+plot(m.C)
+
+par(mfrow=c(2,2))
+plot(m.Y)
+```
+
