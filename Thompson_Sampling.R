@@ -1,7 +1,7 @@
 
 # Thompson Sampling
 
-
+library(tidyverse)
 Times = 1000
 
 # sample from prior function
@@ -37,13 +37,14 @@ K = length(actual_thetas)
 action_counts = c(rep(0,K))
 
 # initialize prior parameters
-alpha_vec = rep(0,K)
-beta_vec = rep(0,K)
+alpha_vec = rep(1,K)
+beta_vec = rep(1,K)
 
 # From example in the paper
 #alpha_vec = c(1000,1000,100)
 #beta_vec = c(100,110,10)
 
+probs = {}
 
 for(t in 1:Times){
   
@@ -67,13 +68,23 @@ for(t in 1:Times){
   
   # Update action counts
   action_counts[arm] = 1 + action_counts[arm]
+  
+  # Probabilities of choosing each action
+  probs = rbind(probs,c(t,action_counts/t))
 }
 
 # Action probabilites
 action_counts/Times
 
+# Recreate the plot
 
+pdata = data.frame(probs)
+colnames(pdata) = c('Time','Action 1','Action 2','Action 3')
 
+pdata %>% gather(key = 'Action',value = 'Prob',2:4) %>%
+  ggplot(aes(x = Time,y = Prob,color = Action)) +
+    geom_smooth(method = 'loess')
+  
 
 
 
