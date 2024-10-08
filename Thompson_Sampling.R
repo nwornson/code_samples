@@ -81,10 +81,14 @@ action_counts/Times
 pdata = data.frame(probs)
 colnames(pdata) = c('Time','Action 1','Action 2','Action 3')
 
+
+#pdf('Action_probs.pdf')
+
 pdata %>% gather(key = 'Action',value = 'Prob',2:4) %>%
   ggplot(aes(x = Time,y = Prob,color = Action)) +
     geom_smooth(method = 'loess')
   
+#dev.off()
 
 
 
